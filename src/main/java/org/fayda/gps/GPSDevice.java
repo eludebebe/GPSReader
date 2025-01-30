@@ -1,91 +1,160 @@
 package org.fayda.gps;
 
-
 import com.fazecast.jSerialComm.SerialPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
+import java.util.List;
 import java.util.Scanner;
 
 public class GPSDevice {
 
-//   String[] gpsDeviceTage = new String[] {"GPS","Receiver","GNSS","u-blox"};
-   String gpsDeviceTag="GPS";
-    private SerialPort getConnectedGPSDevicePort(){
-        System.out.println("GPS Device Handler, Checking Connected GPS Port for Device Tag:"+gpsDeviceTag);
-        SerialPort[] ports = SerialPort.getCommPorts();
-        for (int i = 0; i < ports.length; i++) {
-            if(ports[i].getPortDescription()!=null){
-                    if(ports[i].getPortDescription().toLowerCase().contains(gpsDeviceTag.toLowerCase())){
-                        System.out.println("GPS Device Found On: "+ports[i].getSystemPortName() +", Name: "+ports[i].getPortDescription());
-                        return ports[i];
-                    }
+    private static final Logger logger = LoggerFactory.getLogger(GPSDevice.class);
 
+    final List<GPSDeviceConfig> deviceConfigs;
+
+    private GPSDeviceConfig matchedConfig;
+
+    private int totalSentences = 0;
+    private int validSentences = 0;
+
+    /**
+     * Constructor: tries to find a matching device right away
+     */
+    public GPSDevice(List<GPSDeviceConfig> deviceConfigs) {
+        this.deviceConfigs = deviceConfigs;
+        this.matchedConfig = findMatchingConfig(deviceConfigs);
+
+        if (this.matchedConfig == null) {
+            logger.warn("No matching GPS device found on any COM port.");
+        } else {
+            logger.info("Matched GPS Device at construction: {}", matchedConfig.getGpsDevice());
+        }
+    }
+
+    /**
+     * Return true if a GPS device is matched & found
+     */
+    public boolean isDeviceFound() {
+        return matchedConfig != null;
+    }
+
+    /**
+     * Attempt to find a matching device config by enumerating COM ports
+     */
+    private GPSDeviceConfig findMatchingConfig(List<GPSDeviceConfig> deviceConfigs) {
+        for (GPSDeviceConfig config : deviceConfigs) {
+            SerialPort serialPort = COMPortDeviceMatcher.findMatchingCOMPort(config.getGpsDevice());
+            if (serialPort != null) {
+                logger.info("Found matching device: {} on port: {}",
+                        config.getGpsDevice().getName(), serialPort.getSystemPortName());
+                return config;
             }
         }
-        System.out.println("ERROR: GPS Device Port Not Found");
-
-       return null;
-    }
-
-    public GPSDevice(String deviceTag){
-        gpsDeviceTag=deviceTag;
-    }
-
-    public GPSDataDTO getCurrentLocation() {
-        GPSDataDTO dto = new GPSDataDTO();
-        if (getCurrentLocation(dto)) return dto;
         return null;
     }
-    private   boolean getCurrentLocation(GPSDataDTO gpsDto){
-        // List all available serial ports
-        SerialPort serialPort = getConnectedGPSDevicePort();
 
-        if(serialPort==null){
+    /**
+     * Tries to fetch the current location. If matchedConfig was null,
+     * we re-check to see if the device is now plugged in.
+     */
+    public GPSDataDTO getCurrentLocation() {
+        if (!isDeviceFound()) {
+            logger.warn("No GPS device found previously. Attempting to re-match now...");
+            this.matchedConfig = findMatchingConfig(this.deviceConfigs);
+
+            if (!isDeviceFound()) {
+                logger.error("Still no GPS device found. Cannot fetch location.");
+                return null;
+            } else {
+                logger.info("Re-matched GPS Device: {}", matchedConfig.getGpsDevice());
+            }
+        }
+
+        GPSDataDTO gpsData = new GPSDataDTO();
+        boolean isDataFetched = fetchLocationData(gpsData);
+
+        if (isDataFetched) {
+            return gpsData;
+        } else {
+            logger.error("No valid GPS data captured.");
+            return null;
+        }
+    }
+
+    /**
+     * Actually open the port, read data lines, parse, etc.
+     */
+    private boolean fetchLocationData(GPSDataDTO gpsDto) {
+        SerialPort serialPort = COMPortDeviceMatcher.findMatchingCOMPort(matchedConfig.getGpsDevice());
+        if (serialPort == null) {
+            logger.error("No GPS device connected. Please check the connection and try again.");
+            matchedConfig = null;
             return false;
         }
 
-        serialPort.setBaudRate(9600); // Standard baud rate for GPS devices
+        serialPort.setBaudRate(matchedConfig.getBaudRate());
+        if (!serialPort.openPort()) {
+            logger.error("Failed to open port. Ensure no other application is using it.");
+            matchedConfig = null;
+            return false;
+        }
 
-        if (serialPort.openPort()) {
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+        logger.info("Port opened successfully. Listening for GPS data...");
+        boolean isDataFound = false;
 
+        try (InputStream inputStream = serialPort.getInputStream();
+             Scanner scanner = new Scanner(inputStream)) {
 
-            // Read data from the port
-            InputStream inputStream = serialPort.getInputStream();
-            Scanner scanner = new Scanner(inputStream);
-
-//        System.out.println("Listening for GPS data...");
             gpsDto.setDataValid(false);
 
-            while (!gpsDto.isDataValid()) {
-                if (scanner.hasNextLine()) {
-                    String line = scanner.nextLine();
-                    System.out.println(line);
-                    gpsDto.parseSentence(line);
+            Thread.sleep(matchedConfig.getStabilizationTimeMs());
+            logger.info("Device stabilization complete.");
 
+            long startTime = System.currentTimeMillis();
+
+            while (scanner.hasNextLine()
+                    && (System.currentTimeMillis() - startTime) < matchedConfig.getGpsDataFetchTimeoutMs()) {
+
+                String line = scanner.nextLine().trim();
+                totalSentences++;
+
+                logger.debug("Raw GPS Sentence: {}", line);
+
+                if (!line.startsWith("$")) {
+                    continue; // Not an NMEA sentence
+                }
+
+                gpsDto.parseSentence(line);
+
+                if (gpsDto.isDataValid()) {
+                    validSentences++;
+                    isDataFound = true;
+                    break;
+                } else {
+                    logger.warn("Parsed sentence but data invalid: {}", line);
                 }
             }
-            serialPort.closePort();
-        } else {
-            System.out.println("Failed to open port.");
+
+        } catch (Exception e) {
+            logger.error("Exception while reading GPS data", e);
+            matchedConfig = null;
             return false;
+        } finally {
+            serialPort.closePort();
+            logger.info("Port closed.");
         }
 
-        return gpsDto.isDataValid();
+        logFinalMetrics(gpsDto);
+        return isDataFound;
     }
 
-    public static void main(String[] args) {
-        GPSDevice gpsDevice = new GPSDevice("GPS");
-        GPSDataDTO dto = new GPSDataDTO();
-        for(int i=0;i<10;i++) {
-            if (gpsDevice.getCurrentLocation(dto)) {
-                System.out.println("Location: " + dto.getAltitude() + " " + dto.getLatitude() + " " + dto.getLongitude());
-            }
-        }
+    private void logFinalMetrics(GPSDataDTO gpsDto) {
+        logger.info("Final Metrics:");
+        logger.info("  Latitude  : {}", gpsDto.getLatitude());
+        logger.info("  Longitude : {}", gpsDto.getLongitude());
+        logger.info("  Altitude  : {}", gpsDto.getAltitude());
+        logger.info("  Data Valid: {}", gpsDto.isDataValid());
     }
-
 }

@@ -1,72 +1,16 @@
 package org.fayda.gps;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * DTO class for parsing and holding crucial GPS data from NMEA sentences.
+ * DTO class for parsing and holding GPS data.
  */
 public class GPSDataDTO {
 
-    /** Crucial GPS Data Fields */
-    private String latitude; // Latitude in NMEA format (e.g., 0854.51704,N)
-    private String longitude; // Longitude in NMEA format (e.g., 03844.10915,E)
-    private String altitude; // Altitude in meters as a string
-    private String timeUTC; // UTC time in HHMMSS.SS format
-    private boolean dataValid; // Whether the position data is valid
-    private String fixType; // Type of fix (0 = No fix, 1 = 2D fix, 2 = 3D fix)
-    private String speed; // Speed over ground in knots
-    private String course; // Course over ground in degrees
+    private String latitude;
+    private String longitude;
+    private String altitude;
+    private boolean dataValid;
 
-    // Setters with conditional assignment
-    public void setLatitude(String latitude) {
-        if (this.latitude == null) {
-            this.latitude = latitude;
-        }
-    }
 
-    public void setLongitude(String longitude) {
-        if (this.longitude == null) {
-            this.longitude = longitude;
-        }
-    }
-
-    public void setAltitude(String altitude) {
-        if (this.altitude == null) {
-            this.altitude = altitude;
-        }
-    }
-
-    public void setTimeUTC(String timeUTC) {
-        if (this.timeUTC == null) {
-            this.timeUTC = timeUTC;
-        }
-    }
-
-    public void setDataValid(boolean dataValid) {
-        if (!this.dataValid) {
-            this.dataValid = dataValid;
-        }
-    }
-
-    public void setFixType(String fixType) {
-        if (this.fixType == null) {
-            this.fixType = fixType;
-        }
-    }
-
-    public void setSpeed(String speed) {
-        if (this.speed == null) {
-            this.speed = speed;
-        }
-    }
-
-    public void setCourse(String course) {
-        if (this.course == null) {
-            this.course = course;
-        }
-    }
-
-    // Getters to retrieve the values of fields
     public String getLatitude() {
         return latitude;
     }
@@ -79,84 +23,111 @@ public class GPSDataDTO {
         return altitude;
     }
 
-    public String getTimeUTC() {
-        return timeUTC;
-    }
-
-
-    public String getFixType() {
-        return fixType;
-    }
-
-    public String getSpeed() {
-        return speed;
-    }
-
-    public String getCourse() {
-        return course;
-    }
-
-    /**
-     * Parses a $GPGLL sentence and populates latitude, longitude, and validity fields.
-     */
-    private void parseGPGLL(String sentence) {
-        String[] parts = sentence.split(",");
-        setLatitude(parts[1] + "," + parts[2]);
-        setLongitude(parts[3] + "," + parts[4]);
-        setTimeUTC(parts[5]);
-        setDataValid("A".equals(parts[6]));
-    }
-
-    /**
-     * Parses a $GPGSA sentence to get the fix type.
-     */
-    private void parseGPGSA(String sentence) {
-        String[] parts = sentence.split(",");
-        setFixType(parts[2]);
-    }
-
-    /**
-     * Parses a $GPGGA sentence to get altitude and other fields if needed.
-     */
-    private void parseGPGGA(String sentence) {
-        String[] parts = sentence.split(",");
-        setTimeUTC(parts[1]);
-        setLatitude(parts[2] + "," + parts[3]);
-        setLongitude(parts[4] + "," + parts[5]);
-        setAltitude(parts[9]);
-    }
-
-    /**
-     * Parses a $GPRMC sentence to extract speed, course, latitude, longitude, and time.
-     */
-    private void parseGPRMC(String sentence) {
-        String[] parts = sentence.split(",");
-        setTimeUTC(parts[1]);
-        setDataValid("A".equals(parts[2]));
-        setLatitude(parts[3] + "," + parts[4]);
-        setLongitude(parts[5] + "," + parts[6]);
-        setSpeed(parts[7]);
-        setCourse(parts[8]);
-    }
-
-    public void parseSentence(String sentence){
-//        System.out.println("Parsing: "+sentence);
-        if (sentence.startsWith("$GPRMC")) {
-            parseGPRMC(sentence);
-        } else if (sentence.startsWith("$GPGGA")) {
-            parseGPGGA(sentence);
-        } else if (sentence.startsWith("$GPGSA")) {
-            parseGPGSA(sentence);
-        }
-    }
-
     public boolean isDataValid() {
+        return dataValid;
+    }
 
-        if (dataValid) {
-            if (altitude != null && latitude != null && fixType != null && !fixType.equalsIgnoreCase("0")) {
-                return true;
-            }
+    // Setters
+    public void setLatitude(String latitude) {
+        this.latitude = latitude;
+    }
+
+    public void setLongitude(String longitude) {
+        this.longitude = longitude;
+    }
+
+    public void setAltitude(String altitude) {
+        this.altitude = altitude;
+    }
+
+    public void setDataValid(boolean dataValid) {
+        this.dataValid = dataValid;
+    }
+
+    /**
+     * Parses an NMEA sentence and updates the DTO fields.
+     *
+     * @param sentence The raw NMEA sentence to parse.
+     */
+    public void parseSentence(String sentence) {
+        if (sentence == null || sentence.isEmpty() || !sentence.startsWith("$")) {
+            System.err.println("[ERROR] Invalid GPS sentence: " + sentence);
+            return;
         }
-        return false;
+
+        String[] parts = sentence.split(",");
+        switch (parts[0]) {
+            case "$GPGGA":
+            case "$GNGGA": // GLONASS equivalent
+                parseGPGGA(parts);
+                break;
+            default:
+//                System.out.println("[INFO] Skipping unsupported sentence type: " + parts[0]);
+        }
+    }
+
+    /**
+     * Parses the GPGGA (Global Positioning System Fix Data) NMEA sentence.
+     *
+     * @param parts The split parts of the GPGGA sentence.
+     */
+    private void parseGPGGA(String[] parts) {
+        try {
+            if (parts.length > 9) {
+                latitude = parseCoordinate(parts[2], parts[3]); // Latitude and direction (N/S)
+                longitude = parseCoordinate(parts[4], parts[5]); // Longitude and direction (E/W)
+                altitude = parts[9]; // Altitude in meters
+
+                String fixStatus = parts[6]; // Fix status (0, 1, 2)
+                String satellites = parts[7]; // Number of satellites in use
+                System.out.println("[INFO] Fix Status: " + fixStatus + ", Satellites: " + satellites);
+
+                dataValid = "1".equals(fixStatus) && latitude != null && longitude != null && altitude != null && !altitude.isEmpty();
+            } else {
+                System.err.println("[ERROR] Incomplete GPGGA sentence: " + String.join(",", parts));
+                dataValid = false;
+            }
+        } catch (Exception e) {
+            System.err.println("[ERROR] Exception parsing GPGGA: " + e.getMessage());
+            dataValid = false;
+        }
+    }
+
+
+    /**
+     * Converts NMEA coordinates into decimal degrees.
+     *
+     * @param coordinate The raw NMEA coordinate (e.g., "4807.038").
+     * @param direction  The direction (N/S/E/W).
+     * @return The converted coordinate in decimal degrees or null if invalid.
+     */
+    String parseCoordinate(String coordinate, String direction) {
+        if (coordinate == null || direction == null || coordinate.isEmpty()) {
+            return null;
+        }
+        try {
+            int degreesLength = (direction.equalsIgnoreCase("N") || direction.equalsIgnoreCase("S")) ? 2 : 3;
+            double degrees = Double.parseDouble(coordinate.substring(0, degreesLength));
+            double minutes = Double.parseDouble(coordinate.substring(degreesLength)) / 60.0;
+            double decimalDegrees = degrees + minutes;
+
+            if (direction.equalsIgnoreCase("S") || direction.equalsIgnoreCase("W")) {
+                decimalDegrees *= -1;
+            }
+            return String.format("%.6f", decimalDegrees);
+        } catch (Exception e) {
+            System.err.println("[ERROR] Error parsing coordinate: " + coordinate + ", Direction: " + direction);
+            return null;
+        }
+    }
+
+    @Override
+    public String toString() {
+        return "GPSDataDTO {" +
+                "latitude='" + latitude + '\'' +
+                ", longitude='" + longitude + '\'' +
+                ", altitude='" + altitude + '\'' +
+                ", dataValid=" + dataValid +
+                '}';
     }
 }

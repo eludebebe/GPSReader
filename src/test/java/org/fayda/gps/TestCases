@@ -1,0 +1,6 @@
+Test Case ID	Test Description	Input	Expected Output	Actual Output	Result
+TC-01	Parsing a valid $GPGGA sentence	$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47	Latitude: 48.117300, Longitude: 11.516667, Altitude: 545.4	Latitude: 48.117300, Longitude: 11.516667, Altitude: 545.4	Pass
+TC-02	Parsing an incomplete $GPGGA sentence	$GPGGA,123519,,,,,,0,0,,,M,,M,,*47	Latitude: No Latitude Data, Longitude: No Longitude Data, Altitude: No Altitude Data	Latitude: No Latitude Data, Longitude: No Longitude Data, Altitude: No Altitude Data	Pass
+TC-03	Parsing a sentence with invalid format	INVALID_DATA	Latitude: No Latitude Data, Longitude: No Longitude Data, Altitude: No Altitude Data	Latitude: No Latitude Data, Longitude: No Longitude Data, Altitude: No Altitude Data	Pass
+TC-04	Parsing a valid coordinate directly via $GPGGA	4807.038, N	48.1173	48.1173	Pass
+TC-05	Handling corrupted sentence with invalid symbols	��������������� b���bbbj���,M,,*57	No Latitude Data, No Longitude Data, No Altitude Data	No Latitude Data, No Longitude Data, No Altitude Data	Pass
